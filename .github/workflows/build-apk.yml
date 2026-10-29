@@ -24,17 +24,46 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Use compatible Gradle version
-        run: |
-          sed -i 's/gradle-9\.0\.0-bin\.zip/gradle-8.9-bin.zip/' gradle/wrapper/gradle-wrapper.properties
-          chmod +x gradlew
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: sdkmanager "build-tools;35.0.0" "platforms;android-35"
 
       - name: Build release APK
-        run: ./gradlew --no-daemon assembleRelease
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
 
-      - name: Upload APK
+      - name: Generate personal signing key
+        run: |
+          keytool -genkeypair \
+            -keystore "$RUNNER_TEMP/zapret-release.jks" \
+            -storepass "$KEY_PASS" \
+            -keypass "$KEY_PASS" \
+            -alias zapret \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=ZapretDroid Personal"
+        env:
+          KEY_PASS: ${{ secrets.APK_KEY_PASSWORD }}
+
+      - name: Sign APK with Android apksigner
+        run: |
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          test -n "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks "$RUNNER_TEMP/zapret-release.jks" \
+            --ks-key-alias zapret \
+            --ks-pass env:KEY_PASS \
+            --key-pass env:KEY_PASS \
+            --out "$RUNNER_TEMP/ZapretDroid-signed.apk" \
+            "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$RUNNER_TEMP/ZapretDroid-signed.apk"
+        env:
+          KEY_PASS: ${{ secrets.APK_KEY_PASSWORD }}
+
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: ZapretDroid-release-apk
-          path: app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
+          name: ZapretDroid-signed-apk
+          path: ${{ runner.temp }}/ZapretDroid-signed.apk
